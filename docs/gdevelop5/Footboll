@@ -1,0 +1,584 @@
+
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Emon Football Penalty 3D</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#061b16;color:white;
+ font-family:Arial,sans-serif;overflow:hidden;
+}
+#game{
+ width:100%;height:100dvh;
+ position:relative;overflow:hidden;
+}
+#stadium{
+ position:absolute;inset:0 0 29% 0;
+}
+#stadium canvas{
+ width:100%;height:100%;display:block;
+}
+#scoreboard{
+ position:absolute;top:12px;left:50%;
+ transform:translateX(-50%);
+ width:230px;text-align:center;
+ background:#071b2aee;border:2px solid #efc23e;
+ border-radius:13px;padding:9px;
+ z-index:5;pointer-events:none;
+}
+#scoreboard h3{margin:0;color:#ffd64c;font-size:17px}
+#score{font-size:27px;font-weight:bold;margin:5px}
+#round{font-size:14px}
+#message{
+ position:absolute;top:117px;left:50%;
+ transform:translateX(-50%);
+ background:#08253aeF;border-radius:30px;
+ padding:10px 15px;color:#ffdf69;
+ font-weight:bold;font-size:14px;
+ white-space:nowrap;z-index:5;
+}
+#controls{
+ position:absolute;bottom:0;left:0;width:100%;
+ height:29%;min-height:205px;
+ background:#061d27;
+ padding:9px 12px 12px;
+ display:flex;flex-direction:column;
+ align-items:center;justify-content:space-around;
+ border-top:2px solid #244c45;
+}
+#directions{
+ display:flex;gap:8px;width:100%;
+ justify-content:center;
+}
+button{
+ border:0;border-radius:13px;
+ background:#efbd36;color:#101820;
+ padding:12px 13px;font-size:16px;
+ font-weight:bold;min-width:0;
+}
+#directions button{flex:1;max-width:130px}
+button.selected{
+ background:white;color:#07844c;
+ outline:3px solid #efbd36;
+}
+#powerbox{width:100%;max-width:550px;text-align:center}
+#power{width:100%;accent-color:#ffc52e}
+#powertext{font-size:14px;margin-bottom:4px}
+#shoot{
+ background:#13c775;color:white;
+ width:65%;max-width:350px;
+ font-size:20px;padding:13px;
+}
+#reset{background:#eee;padding:10px 18px}
+button:disabled{opacity:.45}
+#loading{
+ position:absolute;inset:0;background:#102c23;
+ display:flex;align-items:center;justify-content:center;
+ z-index:10;font-size:20px;font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+<div id="game">
+
+<div id="loading">⚽ 3D ফুটবল লোড হচ্ছে...</div>
+
+<div id="stadium"></div>
+
+<div id="scoreboard">
+<h3>🏆 PENALTY SHOOTOUT</h3>
+<div id="score">0 - 0</div>
+<div id="round">শট: 0 / 5</div>
+</div>
+
+<div id="message">পেনাল্টির জন্য প্রস্তুত!</div>
+
+<div id="controls">
+
+<div id="directions">
+<button id="left" onclick="choose('left')">⬅ বাম</button>
+<button id="center" class="selected" onclick="choose('center')">⬆ মাঝখান</button>
+<button id="right" onclick="choose('right')">➡ ডান</button>
+</div>
+
+<div id="powerbox">
+<div id="powertext">শটের শক্তি: 75%</div>
+<input id="power" type="range" min="30" max="100" value="75"
+oninput="document.getElementById('powertext').innerText='শটের শক্তি: '+this.value+'%'">
+</div>
+
+<button id="shoot" onclick="shoot()">⚽ শট নিন</button>
+<button id="reset" onclick="restart()">🔄 নতুন ম্যাচ</button>
+
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+
+<script>
+let scene,camera,renderer;
+let player,keeper,ball;
+let ballHome;
+let selected="center";
+let shots=0,goals=0,busy=false;
+let playerLegs=[],keeperArms=[];
+let ballStartTime=0;
+let ballEnd=null;
+let ballStart=null;
+let kickAnimation=false;
+
+const $=id=>document.getElementById(id);
+
+function material(color,roughness=.85){
+ return new THREE.MeshStandardMaterial({
+  color:color,roughness:roughness
+ });
+}
+
+function cube(parent,w,h,d,x,y,z,color){
+ const m=new THREE.Mesh(
+  new THREE.BoxGeometry(w,h,d),material(color)
+ );
+ m.position.set(x,y,z);
+ m.castShadow=true;
+ m.receiveShadow=true;
+ parent.add(m);
+ return m;
+}
+
+function sphere(parent,r,x,y,z,color){
+ const m=new THREE.Mesh(
+  new THREE.SphereGeometry(r,16,16),material(color)
+ );
+ m.position.set(x,y,z);
+ m.castShadow=true;
+ parent.add(m);
+ return m;
+}
+
+function createPlayer(shirt,shorts,isKeeper=false){
+ const group=new THREE.Group();
+
+ // Body
+ cube(group,.66,.9,.35,0,1.28,0,shirt);
+
+ // Head and neck
+ sphere(group,.23,0,1.94,0,0xc68a65);
+ cube(group,.17,.17,.17,0,1.79,0,0xc68a65);
+
+ // Legs with pivot
+ for(let side of [-1,1]){
+  const leg=new THREE.Group();
+  leg.position.set(side*.19,.91,0);
+
+  cube(leg,.23,.72,.24,0,-.36,0,shorts);
+  cube(leg,.26,.14,.39,0,-.72,-.07,0x111111);
+
+  group.add(leg);
+
+  if(isKeeper){
+   playerLegs.push(leg);
+  }else{
+   playerLegs.push(leg);
+  }
+
+  // Arms
+  const arm=new THREE.Group();
+  arm.position.set(side*.4,1.57,0);
+  const armMesh=cube(arm,.17,.72,.19,0,-.35,0,shirt);
+  arm.rotation.z=-side*.16;
+  group.add(arm);
+
+  sphere(group,isKeeper?.16:.1,side*.47,.84,0,
+   isKeeper?0xffffff:0xc68a65);
+  if(isKeeper)keeperArms.push(arm);
+ }
+
+ return group;
+}
+
+function createBall(){
+ const g=new THREE.Group();
+
+ sphere(g,.22,0,0,0,0xffffff);
+
+ // Black ball panels
+ for(let i=0;i<5;i++){
+  let patch=new THREE.Mesh(
+   new THREE.CircleGeometry(.065,5),
+   material(0x111111)
+  );
+  let a=i*Math.PI*2/5;
+  patch.position.set(
+   Math.sin(a)*.19,
+   Math.cos(a)*.12,
+   .16
+  );
+  g.add(patch);
+ }
+
+ scene.add(g);
+ return g;
+}
+
+function addLine(points,color=0xffffff){
+ const geo=new THREE.BufferGeometry().setFromPoints(points);
+ scene.add(new THREE.Line(
+  geo,new THREE.LineBasicMaterial({color})
+ ));
+}
+
+function stadium(){
+ scene=new THREE.Scene();
+ scene.background=new THREE.Color(0x88b9d8);
+ scene.fog=new THREE.Fog(0x88b9d8,55,100);
+
+ // Lights
+ scene.add(new THREE.HemisphereLight(
+  0xffffff,0x35552b,2
+ ));
+
+ const sun=new THREE.DirectionalLight(0xffffff,2.1);
+ sun.position.set(-12,20,12);
+ sun.castShadow=true;
+ sun.shadow.mapSize.set(1024,1024);
+ scene.add(sun);
+
+ // Ground
+ const grass=new THREE.Mesh(
+  new THREE.PlaneGeometry(70,80),
+  material(0x16853d)
+ );
+ grass.rotation.x=-Math.PI/2;
+ grass.position.set(0,-.08,-8);
+ grass.receiveShadow=true;
+ scene.add(grass);
+
+ // Grass stripes
+ for(let i=0;i<16;i++){
+  const stripe=new THREE.Mesh(
+   new THREE.PlaneGeometry(70,2.5),
+   material(i%2?0x17823d:0x20964a)
+  );
+  stripe.rotation.x=-Math.PI/2;
+  stripe.position.set(0,-.055,-44+i*5);
+  scene.add(stripe);
+ }
+
+ // Pitch boundary
+ addLine([
+  new THREE.Vector3(-18,.02,12),
+  new THREE.Vector3(18,.02,12),
+  new THREE.Vector3(18,.02,-40),
+  new THREE.Vector3(-18,.02,-40),
+  new THREE.Vector3(-18,.02,12)
+ ]);
+
+ // Penalty box
+ addLine([
+  new THREE.Vector3(-10,.02,-8),
+  new THREE.Vector3(-10,.02,-19),
+  new THREE.Vector3(10,.02,-19),
+  new THREE.Vector3(10,.02,-8)
+ ]);
+
+ // Penalty spot
+ const spot=new THREE.Mesh(
+  new THREE.CircleGeometry(.13,20),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+ );
+ spot.rotation.x=-Math.PI/2;
+ spot.position.set(0,.025,0);
+ scene.add(spot);
+
+ // Stadium seats and audience
+ const colors=[
+  0xffffff,0xff3030,0xffd333,
+  0x2255ee,0x11c78a,0x111111
+ ];
+
+ const crowdMaterials=colors.map(c=>material(c));
+ const crowdGeo=new THREE.SphereGeometry(.115,6,6);
+
+ for(let side of [-1,1]){
+  for(let row=0;row<8;row++){
+   cube(scene,3,.55,45,
+    side*(18+row*.65),1+row*.52,-8,
+    row%2?0x293d63:0x354c79);
+  }
+
+  for(let i=0;i<650;i++){
+   let row=Math.floor(Math.random()*8);
+   let person=new THREE.Mesh(
+    crowdGeo,crowdMaterials[
+     Math.floor(Math.random()*colors.length)
+    ]
+   );
+   person.position.set(
+    side*(18+row*.65),
+    1.65+row*.52,
+    -30+Math.random()*43
+   );
+   scene.add(person);
+  }
+ }
+
+ // Back stands
+ for(let row=0;row<7;row++){
+  cube(scene,48,.55,3,0,1+row*.52,-25-row*.4,
+   row%2?0x263b60:0x344c75);
+ }
+
+ // Roof
+ for(let side of [-1,1]){
+  cube(scene,6,.5,48,side*24,7,-8,0x202e43);
+ }
+
+ // Floodlights
+ for(let x of [-23,23]){
+  cube(scene,.3,12,.3,x,6,-15,0xaaaaaa);
+  const light=new THREE.PointLight(0xffffff,40,60);
+  light.position.set(x,12,-15);
+  scene.add(light);
+ }
+
+ // Goal posts
+ cube(scene,.18,2.5,.18,-3.7,1.25,-13,0xffffff);
+ cube(scene,.18,2.5,.18,3.7,1.25,-13,0xffffff);
+ cube(scene,7.5,.18,.18,0,2.5,-13,0xffffff);
+
+ // Net
+ const netMat=new THREE.LineBasicMaterial({
+  color:0xffffff,transparent:true,opacity:.7
+ });
+
+ for(let x=-3.7;x<=3.71;x+=.35){
+  const geo=new THREE.BufferGeometry().setFromPoints([
+   new THREE.Vector3(x,.05,-13),
+   new THREE.Vector3(x,2.5,-13),
+   new THREE.Vector3(x,2.5,-15.2),
+   new THREE.Vector3(x,.05,-15.2)
+  ]);
+  scene.add(new THREE.Line(geo,netMat));
+ }
+
+ for(let y=.1;y<=2.5;y+=.25){
+  addLine([
+   new THREE.Vector3(-3.7,y,-13),
+   new THREE.Vector3(3.7,y,-13)
+  ]);
+ }
+
+ // Goalkeeper
+ keeper=createPlayer(0xffd01e,0x171717,true);
+ keeper.position.set(0,0,-12.5);
+ scene.add(keeper);
+
+ // Player
+ player=createPlayer(0x1265db,0xffffff,false);
+ player.position.set(0,0,4.1);
+ scene.add(player);
+
+ // Ball
+ ball=createBall();
+ ball.position.set(0,.22,2.75);
+ ballHome=ball.position.clone();
+}
+
+function init(){
+ const holder=$('stadium');
+
+ camera=new THREE.PerspectiveCamera(
+  43,holder.clientWidth/holder.clientHeight,.1,150
+ );
+
+ // Behind-player broadcast view
+ camera.position.set(0,5.8,16);
+ camera.lookAt(0,1.35,-7);
+
+ renderer=new THREE.WebGLRenderer({
+  antialias:true,alpha:false
+ });
+ renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+ renderer.setSize(holder.clientWidth,holder.clientHeight);
+ renderer.shadowMap.enabled=true;
+ renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+
+ holder.appendChild(renderer.domElement);
+
+ stadium();
+
+ // Ensure camera is set after creating the field
+ camera.aspect=holder.clientWidth/holder.clientHeight;
+ camera.updateProjectionMatrix();
+
+ animate();
+ $('loading').style.display='none';
+}
+
+function choose(direction){
+ if(busy||shots>=5)return;
+ selected=direction;
+
+ ['left','center','right'].forEach(id=>{
+  $(id).classList.remove('selected');
+ });
+ $(direction).classList.add('selected');
+
+ $('message').innerText=
+ direction==='left'?'বাম দিকে লক্ষ্য করুন':
+ direction==='right'?'ডান দিকে লক্ষ্য করুন':
+ 'মাঝখানে লক্ষ্য করুন';
+}
+
+function shoot(){
+ if(busy||shots>=5)return;
+ busy=true;
+ shots++;
+
+ $('shoot').disabled=true;
+
+ const power=Number($('power').value)/100;
+ const directions=['left','center','right'];
+ const dive=directions[Math.floor(Math.random()*3)];
+ const saved=dive===selected;
+
+ // Keeper dives
+ keeper.position.x=
+  dive==='left'?-2.5:
+  dive==='right'?2.5:0;
+
+ keeper.rotation.z=
+  dive==='left'?.85:
+  dive==='right'?-.85:0;
+
+ keeper.position.y=.1;
+
+ // Run and kick
+ player.position.z=3.8;
+ playerLegs[1].rotation.x=-.8;
+
+ $('message').innerText='⚽ শট নেওয়া হচ্ছে!';
+
+ ballStart=ball.position.clone();
+
+ ballEnd=new THREE.Vector3(
+  selected==='left'?-2.8:
+  selected==='right'?2.8:0,
+  1.1+power*.5,
+  -13.5
+ );
+
+ ballStartTime=performance.now();
+ kickAnimation=true;
+ ball.userData.saved=saved;
+ ball.userData.power=power;
+}
+
+function finishShot(){
+ let saved=ball.userData.saved;
+
+ if(saved){
+  $('message').innerText='🧤 গোলকিপার বল আটকেছে!';
+ }else{
+  goals++;
+  $('message').innerText='⚽ GOOOOAL! দুর্দান্ত শট!';
+ }
+
+ $('score').innerText=goals+' - '+(shots-goals);
+ $('round').innerText='শট: '+shots+' / 5';
+
+ setTimeout(()=>{
+  ball.position.copy(ballHome);
+  keeper.position.set(0,0,-12.5);
+  keeper.rotation.set(0,0,0);
+  player.position.set(0,0,4.1);
+  playerLegs.forEach(l=>l.rotation.set(0,0,0));
+
+  busy=false;
+
+  if(shots>=5){
+   $('message').innerText='🏆 ম্যাচ শেষ! আপনার গোল '+goals+'/5';
+   $('shoot').disabled=true;
+  }else{
+   $('message').innerText='পরের পেনাল্টি নিন!';
+   $('shoot').disabled=false;
+  }
+ },1100);
+}
+
+function animate(){
+ requestAnimationFrame(animate);
+
+ if(kickAnimation){
+  const t=Math.min((performance.now()-ballStartTime)/750,1);
+  const power=ball.userData.power;
+
+  ball.position.x=THREE.MathUtils.lerp(
+   ballStart.x,ballEnd.x,t
+  );
+  ball.position.z=THREE.MathUtils.lerp(
+   ballStart.z,ballEnd.z,t
+  );
+  ball.position.y=
+   THREE.MathUtils.lerp(ballStart.y,ballEnd.y,t)
+   +Math.sin(t*Math.PI)*2*power;
+
+  ball.rotation.x+=.18;
+  ball.rotation.z+=.12;
+
+  if(t>=1){
+   kickAnimation=false;
+   finishShot();
+  }
+ }
+
+ renderer.render(scene,camera);
+}
+
+function restart(){
+ if(busy)return;
+ shots=0;goals=0;
+ selected='center';
+
+ ball.position.copy(ballHome);
+ keeper.position.set(0,0,-12.5);
+ keeper.rotation.set(0,0,0);
+ player.position.set(0,0,4.1);
+ playerLegs.forEach(l=>l.rotation.set(0,0,0));
+
+ $('score').innerText='0 - 0';
+ $('round').innerText='শট: 0 / 5';
+ $('message').innerText='নতুন ম্যাচ শুরু! ⚽';
+ $('shoot').disabled=false;
+ choose('center');
+}
+
+function resize(){
+ if(!renderer||!camera)return;
+ const holder=$('stadium');
+ camera.aspect=holder.clientWidth/holder.clientHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(holder.clientWidth,holder.clientHeight);
+}
+
+window.addEventListener('resize',resize);
+
+try{
+ if(!window.THREE){
+  throw new Error('Three.js not loaded');
+ }
+ init();
+}catch(e){
+ $('loading').innerText='গেম লোড হয়নি। ইন্টারনেট চালু করে আবার চেষ্টা করুন।';
+ console.error(e);
+}
+</script>
+</body>
+</html>
+
